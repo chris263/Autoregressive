@@ -5,18 +5,35 @@ date: "4/7/2021"
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+### Script setup
+Install packages, start the README.md, set the random seed  
+```{r Script setup, echo=FALSE, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+
+ip <- installed.packages()
+packages_used <- c("lattice", "tidyverse", "devtools", "here","viridisLite", "leaflet", "lme4")
+
+ip <- installed.packages()
+for (package in packages_used){
+  if (!(package %in% ip[,"Package"])) install.packages(package)
+}#END packages_used
+
+here::i_am("analysis/Autoregressive.Rmd")
+
+random_seed <- 835246
+set.seed(random_seed)
+
 ```
 
-##Spatial Correction 2D Autoregressive
+
+
+## Spatial Correction 2D Autoregressive
 
 Here I am modeling for spatial correction. The key is to calculate the R matrix which is a Kronecker product between correlation rows and correlation columns.<br>
 Simulating trial with 4 varieties and 4 replications.
 
 ```{r spatial correction, echo = TRUE}
-
-#Creating a matrix
+#Creating a matrix with RCBD trial
 library(agricolae)
 T=matrix("NA",16,4)
 trt <- c("tr1","tr2","tr3","tr4")
@@ -53,29 +70,13 @@ Matrix::rankMatrix(Xf) # Check that the rank is 4 and Xf has 4 columns. It works
 XftXf = t(Xf)%*%(Xf)
 XftXf
 
-#Simulating data for each tretament
+#Simulating data for each treatment
 beta2=c(100,110,115,120) # this is a vector with 4 means for each variety
 y=Xf%*%beta2+rnorm(16,0,2) # here I am simulating 16 values for y
 Tnew <- noquote(data.frame(cbind(T[,1:3], y)))
 colnames(Tnew) <- c("Treatment", "Col", "Row", "Yield")
 
-# Function to get correlations 
-createCorrelation <- function(Dat){
-  CorM = diag(1,4,4)
-  for(i in 1:(nrow(CorM)-1)){
-  r1 <- data.frame(as.numeric(Tnew[Dat==i,4]))
-  j=i+1
-  while(j <= nrow(CorM)){
-    r2 <- data.frame(as.numeric(Tnew[Dat==j,4]))
-    co1 <- var(r1,r2)/sqrt(var(r1)*var(r2)) #correlation
-    CorM[i,j] = co1**(j-1) # the power increases with the distance.
-    CorM[j,i] = co1**(j-1)
-    j=j+1
-  }
-  
-  }
-  return(CorM)
-}
+source(here::here("code/prepareData.R"))
 
 RCM = createCorrelation(Tnew$Row) #Calling correlation per row
 CCM = createCorrelation(Tnew$Col) #Calling correlation per col
@@ -95,3 +96,68 @@ finalTable <- cbind(Tnew, corrected)
 knitr::kable(finalTable)
 
 ```
+
+
+## Printig Heatmap Before Correction
+
+```{r plotBefore, echo=TRUE}
+
+z <- prepareHeatmap(finalTable$Yield)
+coul <- viridis(100)
+class(z) <- "numeric"
+levelplot( z, xlab="Columns", ylab="Rows", main = "Before Correction", col.regions=coul)
+
+```
+
+## Printig Heatmap After Correction
+
+```{r plotAfter, echo=TRUE}
+w <- prepareHeatmap(finalTable$corrected)
+coul <- viridis(100)
+class(w) <- "numeric"
+levelplot(w, xlab="Columns", ylab="Rows", main = "After Correction", col.regions=coul)
+
+```
+
+
+## Comparing Heritabilities
+
+I am using lme4 in order to get genotypic and residual variances.
+
+```{r heritability, echo=TRUE}
+
+# Prepareing data for analysis
+analysisData <- cbind(book2[order(book2$trt),],finalTable$Yield,finalTable$corrected)
+colnames(analysisData) <- c("plot","block","trt","Yield","corrected")
+analysisData$Yield <- as.numeric(analysisData$Yield)
+
+#Running lme4 with treatment as random effect and block as fixed.
+library("lme4") 
+# First with no correction
+model_yield <- lmer( Yield ~ (1|trt) + block, na.action = na.exclude, data=analysisData)
+variance_yield = as.data.frame(VarCorr(model_yield))
+
+gvar_yield <- variance_yield[1,"vcov"] # Genotypic variance
+resvar_yield <- variance_yield[2,"vcov"] # residual variance
+
+#Heritability before correction
+h2_yield <- gvar_yield/(gvar_yield+resvar_yield)
+
+# Here with corrected values
+model_corrected <- lmer(corrected ~ (1|trt) + block, na.action = na.exclude, data=analysisData)
+variance_corrected = as.data.frame(VarCorr(model_corrected))
+gvar_corrected <- variance_corrected[1,"vcov"] # Genotypic variance
+resvar_corrected <- variance_corrected[2,"vcov"] # Residual variance
+
+# Heritability after correction
+h2_corrected <- gvar_corrected/(gvar_corrected+resvar_corrected)
+
+#Results
+h2_yield
+h2_corrected
+
+
+
+```
+
+
